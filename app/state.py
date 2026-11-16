@@ -80,9 +80,22 @@ class ProjectState(QObject):
         self.rebuild_timeline()
         self._touch()
 
+    def auto_reference(self) -> "MediaItem | None":
+        """Reference for camera-only projects: the existing master, else the longest probed clip with audio."""
+        cur = next((m for m in self.media if m.is_master), None)
+        if cur is not None:
+            return cur
+        cands = [m for m in self.media if m.info is not None and m.info.audio and m.info.duration]
+        if not cands:
+            return None
+        best = max(cands, key=lambda m: float(m.info.duration))
+        self.set_master(best.id)
+        return best
+
     def set_master(self, media_id: str) -> bool:
         item = self.get(media_id)
-        if item is None or item.kind is not MediaKind.AUDIO:
+        has_audio = item is not None and (item.kind is MediaKind.AUDIO or (item.info is not None and bool(item.info.audio)))
+        if not has_audio:
             return False
         for m in self.media:
             m.is_master = m.id == media_id

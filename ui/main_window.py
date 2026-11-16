@@ -33,6 +33,18 @@ AUDIO_FILTER = "Audio (" + " ".join(f"*{e}" for e in sorted(AUDIO_EXTS)) + ")"
 ALL_FILTER = "Media (" + " ".join(f"*{e}" for e in sorted(VIDEO_EXTS | AUDIO_EXTS)) + ")"
 
 
+def _clock_hint(m) -> float | None:
+    """Approximate wall-clock seconds from container creation time. Only orders candidate pairs; never an offset."""
+    ct = getattr(m.info, "creation_time", None) if m.info is not None else None
+    if not ct:
+        return None
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(str(ct).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
 class MainWindow(QMainWindow):
     def __init__(self, config: Config, deps: DependencyReport) -> None:
         super().__init__()
@@ -120,7 +132,7 @@ class MainWindow(QMainWindow):
         self.a_folder = A("Import Folder…", self.import_folder, "Import a folder; each sub-folder (Camera 1, Camera 2…) becomes one group and track")
         self.a_cam = A("Add Camera…", self.add_camera, "Add camera video recordings")
         self.a_aud = A("Add Audio…", self.add_audio, "Add external audio recordings")
-        self.a_master = A("Set Master Audio", self.set_master, "Use the selected audio file as the sync reference")
+        self.a_master = A("Set Reference", self.set_master, "Use the selected clip or audio file as the sync reference")
         self.a_sync = A("⚡ Synchronize", self.analyze, "Analyze and synchronize all recordings to the master audio")
         self.a_cancel = A("Cancel", self.cancel_analysis, "Cancel the running analysis")
         self.a_updates = A("Check for Updates…", self.check_updates_now, "Look for a newer version on GitHub")
@@ -304,26 +316,27 @@ class MainWindow(QMainWindow):
 
     def _help(self) -> None:
         QMessageBox.information(self, APP_NAME, "1. Add Media → Import Folder (Camera 1, Camera 2, Audio 1…)\n"
-                                "2. Select your recorder's audio, then Add Media → Set Master Audio\n"
+                                "2. Cameras only? Nothing else needed: the camera microphones are used and the longest clip is the starting reference.\n"
+                                "   (Optional: select a clip or audio file, then Add Media → Set Reference to choose another.)\n"
                                 "3. Synchronize, then check the confidence of each clip\n"
                                 "4. Export Timeline (Premiere XML) arrives in a later release")
 
     # ---- state-driven UI --------------------------------------------------
     def _refresh_actions(self) -> None:
         # Actions marked "pending" stay disabled until their phase is implemented.
-        has_audio = any(m.kind is MediaKind.AUDIO for m in self.state.media)
-        self.a_master.setEnabled(has_audio)
+        self.a_master.setEnabled(bool(self.state.media))
         running = self._sync_job is not None
-        master = next((m for m in self.state.media if m.is_master), None)
+        with_audio = [m for m in self.state.media if m.info is not None and m.info.audio]
         others = [m for m in self.state.media if not m.is_master]
-        self.a_sync.setEnabled(not running and master is not None and bool(others))
+        ready = len(self.state.media) >= 2 and bool(with_audio)
+        self.a_sync.setEnabled(not running and ready)
         self.a_cancel.setEnabled(running)
         self.b_cancel.setVisible(running)
-        tip = "Analyze and synchronize all recordings to the master audio"
-        if master is None:
-            tip += "\n(Set a master audio file first)"
-        elif not others:
-            tip += "\n(Add at least one camera or second audio file)"
+        tip = "Analyze and synchronize all recordings using their audio (camera microphones are fine)"
+        if len(self.state.media) < 2:
+            tip += "\n(Add at least two clips)"
+        elif not with_audio:
+            tip += "\n(Wait for media inspection, or add clips that contain audio)"
         self.a_sync.setToolTip(tip)
         self.b_sync.setText("◌ Analyzing…" if running else "⚡ Synchronize")
         self._refresh_summary()
@@ -348,11 +361,14 @@ class MainWindow(QMainWindow):
         if pending:
             self.set_status("Still inspecting media; try again in a moment")
             return
+        master = self.state.auto_reference()
+        if master is None:
+            self.set_status("No clip with audio found to use as the reference")
+            return
         inputs = []
         for m in self.state.media:
             idx = m.info.audio[0].index if (m.info is not None and m.info.audio) else None
-            inputs.append(SyncInput(m.id, m.name, m.path, idx))
-        master = next(m for m in self.state.media if m.is_master)
+            inputs.append(SyncInput(m.id, m.name, m.path, idx, _clock_hint(m)))
         job = make_sync_job(inputs, master.id, self.deps.ffmpeg, cache_dir() / "analysis")
         job.progress.connect(self._on_progress)
         job.finished.connect(self._on_synced)
@@ -363,7 +379,7 @@ class MainWindow(QMainWindow):
         self._jobs.append(job)
         self.progress.setValue(0)
         self._set_state("busy", "Analyzing")
-        self.set_status("Comparing audio waveforms across recordings…")
+        self.set_status(f"Comparing audio waveforms (reference: {master.name})…")
         self._refresh_actions()
         job.start()
 
@@ -499,11 +515,10 @@ class MainWindow(QMainWindow):
     def set_master(self) -> None:
         mid = self.library.selected_id()
         m = self.state.get(mid) if mid else None
-        if m is None or m.kind is not MediaKind.AUDIO:
-            QMessageBox.information(self, APP_NAME, "Select an audio file in the media library first.")
+        if m is None or not self.state.set_master(mid):
+            QMessageBox.information(self, APP_NAME, "Select a clip or audio file that contains audio in the media library first.")
             return
-        self.state.set_master(mid)
-        self.set_status(f"Master audio: {m.name}")
+        self.set_status(f"Reference: {m.name}")
 
     def closeEvent(self, ev: QCloseEvent) -> None:
         if self.state.dirty and not __import__("os").environ.get("AUTOSYNC_HEADLESS"):

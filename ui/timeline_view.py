@@ -230,7 +230,11 @@ class TimelineView(QWidget):
         if not info:
             p.setPen(QColor(theme.TEXT_DIM))
             p.drawText(QRectF(HEADER_W, RULER_H, self.width() - HEADER_W, self.height() - RULER_H), Qt.AlignCenter,
-                       "Import cameras and external audio, set the master audio, then Synchronize")
+                       "Import your camera clips, then click Synchronize")
+        if info and tl is None:
+            p.setPen(QColor(theme.TEXT_DIM))
+            p.drawText(QRectF(HEADER_W, RULER_H, self.width() - HEADER_W, 24), Qt.AlignCenter,
+                       "Clips appear here after you click Synchronize")
         font = QFont(self.font()); font.setPointSize(9)
         title_font = QFont(self.font()); title_font.setPointSize(10); title_font.setBold(True)
         meta_font = QFont(self.font()); meta_font.setPointSize(8)

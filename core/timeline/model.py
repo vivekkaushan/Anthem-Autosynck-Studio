@@ -91,7 +91,7 @@ def build_timeline(media: list[MediaItem], results: dict) -> Timeline:
         if c.synced:
             c.start -= origin
     video_roles = sorted({m.role for m, _ in clips if m.kind is MediaKind.VIDEO})
-    master_roles = [m.role for m, _ in clips if m.is_master]
+    master_roles = [m.role for m, _ in clips if m.is_master and m.kind is MediaKind.AUDIO]
     audio_roles = master_roles[:1] + sorted({m.role for m, _ in clips if m.kind is MediaKind.AUDIO} - set(master_roles[:1]))
     tracks: list[Track] = []
     for i, role in enumerate(video_roles, 1):

@@ -121,3 +121,18 @@ def test_analyze_button_end_to_end(qapp, tmp_path, monkeypatch):
     assert w.inspector.results.item(0, 2).text() in ("High", "Medium")
     assert not w.a_cancel.isEnabled() and w.a_sync.isEnabled()
     for j in list(w._jobs): j.wait()
+
+
+def test_camera_only_chain_no_master_audio(tmp_path):
+    """No recorder: reference is a camera clip; a clip that never overlaps it syncs through a third clip."""
+    from core.media.probe import probe_file
+    src = synth.speechlike(300, SR, seed=21)
+    spec = {"ref": (0.0, 100), "mid": (40.0, 120), "far": (110.0, 80)}   # far overlaps mid only
+    ins = []
+    for k, (st, dur) in spec.items():
+        p = mf.make_video_with_audio_file(tmp_path / f"{k}.mp4", synth.write(tmp_path / f"{k}.wav", synth.cut(src, SR, st, dur), SR), dur)
+        ins.append(SyncInput(k, k, str(p), probe_file(str(p), FFPROBE).audio[0].index))
+    res = synchronize(ins, "ref", FFMPEG, tmp_path / "cache", lambda p, m: None, CancelToken())
+    for k, (st, _) in spec.items():
+        assert abs(res[k].offset - st) < TOL, (k, res[k])
+    assert res["far"].usable and "via" in res["far"].method and res["far"].confidence == "Medium"
