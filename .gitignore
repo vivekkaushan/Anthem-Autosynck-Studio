@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+build/
+dist/
+*.egg-info/
+.DS_Store
+._*
+third_party/ffmpeg/ffmpeg
+third_party/ffmpeg/ffprobe
+third_party/ffmpeg/*.exe
+*.part.wav

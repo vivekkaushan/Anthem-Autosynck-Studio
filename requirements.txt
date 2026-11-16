@@ -1,0 +1,7 @@
+PySide6-Essentials>=6.7
+numpy>=1.26
+scipy>=1.12
+soundfile>=0.12
+pytest>=8.0
+# Dev / packaging
+pyinstaller>=6.0

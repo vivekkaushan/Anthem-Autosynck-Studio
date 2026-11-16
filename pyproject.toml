@@ -1,0 +1,10 @@
+[project]
+name = "autosync-studio"
+version = "0.1.0"
+description = "Multi-camera / external-audio synchronization with Premiere-compatible FCP7 XML export"
+requires-python = ">=3.12"
+dependencies = ["PySide6>=6.7", "numpy>=1.26", "scipy>=1.12", "soundfile>=0.12"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
