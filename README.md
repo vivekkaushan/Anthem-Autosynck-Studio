@@ -1,4 +1,4 @@
-# AutoSync Studio
+# Anthem Auto Synck Studio
 
 Synchronize multi-camera video with external audio recorders by audio waveform, entirely offline, and (coming
 soon) export a Premiere Pro compatible Final Cut Pro 7 XML.
@@ -33,7 +33,7 @@ FFmpeg is included; there is nothing else to install.
 | Audio extraction + cache | Done |
 | Waveform sync (offset, drift, confidence, camera-to-camera fallback) | Done, tested on synthetic audio (error ≈ 0.02 ms) |
 | Timecode sync, audio fingerprint fallback | Planned |
-| Timeline with waveform clips, zoom, playhead, sync status bar | Done |
+| Interface (Auto Synck Studio layout, Anthem logo), timeline with waveform clips, zoom, playhead, sync status | Done |
 | Preview pane, manual offset adjustment | Planned |
 | Premiere XML export | Planned |
 | Save / open projects | Planned |

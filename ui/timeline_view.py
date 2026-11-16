@@ -6,17 +6,17 @@ from fractions import Fraction
 
 import numpy as np
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPolygonF
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QScrollBar, QVBoxLayout, QWidget
+from PySide6.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QPolygonF
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QScrollBar, QVBoxLayout, QWidget
 
 from app.state import ProjectState
 from core.media.models import MediaKind
 from core.media.waveform import PEAKS_PER_SEC
 from ui import theme
 
-HEADER_W = 150
-RULER_H = 26
-LANE_H = 58
+HEADER_W = 200
+RULER_H = 34
+LANE_H = 65
 STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200]
 
 
@@ -46,10 +46,10 @@ class TimelineView(QWidget):
         state.timeline_changed.connect(self._on_timeline)
 
     # ---- model helpers --------------------------------------------------------
-    def lanes(self) -> list[tuple[str, str]]:
-        """(track label, title). Uses the timeline once synced; otherwise derives lanes from imported media."""
+    def lane_info(self) -> list[tuple[str, str, int]]:
+        """(track label, title, clip count). Uses the timeline once synced; otherwise derives lanes from imported media."""
         if self.state.timeline is not None:
-            return [(t.label, t.title) for t in self.state.timeline.tracks]
+            return [(t.label, t.title, len(t.clips)) for t in self.state.timeline.tracks]
 
         def uniq(items):
             seen, out = set(), []
@@ -58,11 +58,17 @@ class TimelineView(QWidget):
                     seen.add(m.role)
                     out.append(m)
             return out
+        count = {}
+        for m in self.state.media:
+            count[m.role] = count.get(m.role, 0) + 1
         cams = uniq(m for m in self.state.media if m.kind is MediaKind.VIDEO)
         auds = uniq(sorted((m for m in self.state.media if m.kind is MediaKind.AUDIO), key=lambda m: not m.is_master))
-        lanes = [(f"V{i}", m.role) for i, m in enumerate(cams, 1)]
-        lanes += [(f"A{i}", ("Master Audio" if m.is_master else m.role)) for i, m in enumerate(auds, 1)]
+        lanes = [(f"V{i}", m.role, count.get(m.role, 0)) for i, m in enumerate(cams, 1)]
+        lanes += [(f"A{i}", ("Master Audio" if m.is_master else m.role), count.get(m.role, 0)) for i, m in enumerate(auds, 1)]
         return lanes
+
+    def lanes(self) -> list[tuple[str, str]]:
+        return [(a, b) for a, b, _ in self.lane_info()]
 
     def total_seconds(self) -> float:
         tl = self.state.timeline
@@ -139,6 +145,14 @@ class TimelineView(QWidget):
         if ev.buttons() & Qt.LeftButton and ev.position().y() <= RULER_H:
             self._set_playhead(self._t(ev.position().x()))
 
+    def jump_to(self, t: float) -> None:
+        """Move the playhead and scroll so it is visible."""
+        self._set_playhead(t)
+        if not (self.scroll <= t <= self.scroll + self.visible_seconds()):
+            self.scroll = max(0.0, t - self.visible_seconds() * 0.1)
+        self.update()
+        self.view_changed.emit()
+
     def _set_playhead(self, t: float) -> None:
         self.playhead = max(0.0, t)
         self.playhead_changed.emit(self.playhead)
@@ -146,21 +160,33 @@ class TimelineView(QWidget):
 
     # ---- painting ------------------------------------------------------------------------
     def _draw_ruler(self, p: QPainter) -> None:
-        p.fillRect(0, 0, self.width(), RULER_H, QColor(theme.PANEL))
+        p.fillRect(0, 0, self.width(), RULER_H, QColor("#16202d"))
         step = next((s for s in STEPS if s * self.px_per_sec >= 90), STEPS[-1])
         t = math.floor(self.scroll / step) * step
-        p.setPen(QPen(QColor(theme.TEXT_DIM)))
         f = QFont(self.font()); f.setPointSize(8); p.setFont(f)
         while self._x(t) < self.width():
             x = self._x(t)
             if x >= HEADER_W:
-                p.drawLine(QPointF(x, RULER_H - 8), QPointF(x, RULER_H))
-                p.drawText(QRectF(x + 3, 0, 80, RULER_H - 6), Qt.AlignVCenter | Qt.AlignLeft, fmt_time(t, step < 1))
+                p.setPen(QPen(QColor("#334354")))
+                p.drawLine(QPointF(x, RULER_H - 12), QPointF(x, RULER_H))
+                p.setPen(QPen(QColor("#97a7b7")))
+                p.drawText(QRectF(x + 4, 0, 90, RULER_H - 8), Qt.AlignVCenter | Qt.AlignLeft, fmt_time(t, step < 1))
             sub = step / 5
+            p.setPen(QPen(QColor("#2a394b")))
             for k in range(1, 5):
                 xs = self._x(t + sub * k)
                 if xs >= HEADER_W and xs < self.width():
-                    p.drawLine(QPointF(xs, RULER_H - 4), QPointF(xs, RULER_H))
+                    p.drawLine(QPointF(xs, RULER_H - 5), QPointF(xs, RULER_H))
+            t += step
+
+    def _draw_grid(self, p: QPainter, y: float) -> None:
+        step = next((s for s in STEPS if s * self.px_per_sec >= 90), STEPS[-1])
+        t = math.floor(self.scroll / step) * step
+        p.setPen(QPen(QColor("#1d2a3a")))
+        while self._x(t) < self.width():
+            x = self._x(t)
+            if x >= HEADER_W:
+                p.drawLine(QPointF(x, y), QPointF(x, y + LANE_H))
             t += step
 
     def _draw_wave(self, p: QPainter, peaks: np.ndarray, c, rect: QRectF, color: QColor) -> None:
@@ -178,15 +204,15 @@ class TimelineView(QWidget):
         if not valid.any():
             return
         cols, i0, i1 = cols[valid], i0[valid], i1[valid]
-        # reduceat over interleaved boundaries gives min/max per pixel column without a Python loop
+        # reduceat over interleaved [start, end) boundaries gives min/max per pixel column without a Python loop.
+        # A sentinel element lets the final boundary equal len(peaks) (reduceat indices must be < len).
+        n = len(peaks)
         idx = np.empty(len(i0) * 2, dtype=int)
-        idx[0::2], idx[1::2] = i0, np.minimum(i1, len(peaks))
-        idx = np.minimum(idx, len(peaks) - 1) if (idx[1::2] <= idx[0::2]).any() else idx
-        try:
-            mins = np.minimum.reduceat(peaks[:, 0], idx)[0::2]
-            maxs = np.maximum.reduceat(peaks[:, 1], idx)[0::2]
-        except (ValueError, IndexError):
-            return
+        idx[0::2], idx[1::2] = i0, np.minimum(i1, n)
+        lo = np.append(peaks[:, 0], 0.0)
+        hi = np.append(peaks[:, 1], 0.0)
+        mins = np.minimum.reduceat(lo, idx)[0::2]
+        maxs = np.maximum.reduceat(hi, idx)[0::2]
         mid = rect.center().y()
         amp = (rect.height() / 2 - 3)
         lines = [QLineF(float(x), mid - float(mx) * amp * 1.9, float(x), mid - float(mn) * amp * 1.9)
@@ -197,77 +223,96 @@ class TimelineView(QWidget):
     def paintEvent(self, _ev) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, False)
-        p.fillRect(self.rect(), QColor(theme.BG))
-        lanes = self.lanes()
+        p.fillRect(self.rect(), QColor("#0f1721"))
+        info = self.lane_info()
         tl = self.state.timeline
         y = RULER_H
-        if not lanes:
+        if not info:
             p.setPen(QColor(theme.TEXT_DIM))
             p.drawText(QRectF(HEADER_W, RULER_H, self.width() - HEADER_W, self.height() - RULER_H), Qt.AlignCenter,
-                       "Import cameras and external audio, set the master audio, then Analyze & Sync")
+                       "Import cameras and external audio, set the master audio, then Synchronize")
         font = QFont(self.font()); font.setPointSize(9)
-        for li, (label, title) in enumerate(lanes):
+        title_font = QFont(self.font()); title_font.setPointSize(10); title_font.setBold(True)
+        meta_font = QFont(self.font()); meta_font.setPointSize(8)
+        for li, (label, title, n) in enumerate(info):
             is_video = label.startswith("V")
             lane_rect = QRectF(HEADER_W, y, self.width() - HEADER_W, LANE_H)
-            p.fillRect(lane_rect, QColor(theme.PANEL if li % 2 == 0 else "#202327"))
+            p.fillRect(lane_rect, QColor("#101924" if li % 2 == 0 else "#131d29"))
+            self._draw_grid(p, y)
             if tl is not None and li < len(tl.tracks):
                 self._draw_track(p, tl.tracks[li], y, is_video, font)
-            p.fillRect(QRectF(0, y, HEADER_W, LANE_H), QColor(theme.PANEL_ALT))
+            # track header
+            p.fillRect(QRectF(0, y, HEADER_W, LANE_H), QColor("#101924" if li % 2 == 0 else "#131d29"))
+            box = QRectF(13, y + (LANE_H - 35) / 2, 35, 35)
+            path = QPainterPath(); path.addRoundedRect(box, 9, 9)
+            p.setPen(QPen(QColor("#365267" if is_video else "#5b4a30"), 1)); p.setBrush(QBrush(QColor("#203347" if is_video else "#2e2a22")))
+            p.drawPath(path)
             p.setFont(font)
-            p.setPen(QColor(theme.TEAL if is_video else theme.ORANGE))
-            p.drawText(QRectF(8, y, 32, LANE_H), Qt.AlignVCenter | Qt.AlignLeft, label)
-            p.setPen(QColor(theme.TEXT))
-            p.drawText(QRectF(40, y, HEADER_W - 44, LANE_H), Qt.AlignVCenter | Qt.AlignLeft, title)
+            p.setPen(QColor("#8adff3" if is_video else theme.ORANGE))
+            p.drawText(box, Qt.AlignCenter, label)
+            p.setFont(title_font); p.setPen(QColor(theme.TEXT))
+            p.drawText(QRectF(58, y + 14, HEADER_W - 64, 18), Qt.AlignVCenter | Qt.AlignLeft, p.fontMetrics().elidedText(title, Qt.ElideRight, int(HEADER_W - 66)))
+            p.setFont(meta_font); p.setPen(QColor("#8c9db0"))
+            p.drawText(QRectF(58, y + 33, HEADER_W - 64, 16), Qt.AlignVCenter | Qt.AlignLeft, f"{n} clip" + ("" if n == 1 else "s"))
             y += LANE_H
-            p.setPen(QPen(QColor(theme.BORDER)))
+            p.setPen(QPen(QColor("#2c3a4a")))
             p.drawLine(0, int(y), self.width(), int(y))
         self._draw_ruler(p)
-        p.setPen(QPen(QColor(theme.BORDER)))
+        p.setPen(QPen(QColor("#354256")))
         p.drawLine(0, RULER_H, self.width(), RULER_H)
+        p.setPen(QPen(QColor("#39485c")))
         p.drawLine(HEADER_W, 0, HEADER_W, self.height())
+        p.setPen(QColor("#93a9bf")); f = QFont(self.font()); f.setPointSize(8); p.setFont(f)
+        p.drawText(QRectF(17, 0, HEADER_W - 20, RULER_H), Qt.AlignVCenter | Qt.AlignLeft, "SOURCE TRACKS")
         # playhead
         px = self._x(self.playhead)
         if HEADER_W <= px <= self.width():
-            p.setPen(QPen(QColor(theme.ORANGE), 1))
+            p.setPen(QPen(QColor("#f8b857"), 2))
             p.drawLine(QPointF(px, 0), QPointF(px, self.height()))
-            p.setBrush(QBrush(QColor(theme.ORANGE)))
-            p.drawPolygon(QPolygonF([QPointF(px - 5, 0), QPointF(px + 5, 0), QPointF(px, 9)]))
+            p.setPen(Qt.NoPen); p.setBrush(QBrush(QColor("#f8b857")))
+            p.drawPolygon(QPolygonF([QPointF(px - 6, 0), QPointF(px + 6, 0), QPointF(px, 9)]))
 
     def _draw_track(self, p: QPainter, track, y: float, is_video: bool, font: QFont) -> None:
-        wave_color = QColor("#46d9cc") if is_video else QColor("#f0b060")
-        base = QColor("#14504b") if is_video else QColor("#4a3720")
         p.save()
         p.setClipRect(QRectF(HEADER_W, y, self.width() - HEADER_W, LANE_H))
+        p.setRenderHint(QPainter.Antialiasing, True)
         for c in track.clips:
             x0, x1 = self._x(float(c.start)), self._x(float(c.end))
             if x1 < HEADER_W or x0 > self.width():
                 continue
-            rect = QRectF(x0, y + 3, max(2.0, x1 - x0), LANE_H - 6)
+            rect = QRectF(x0, y + 10, max(2.0, x1 - x0), LANE_H - 20)
             bad = not c.synced
-            p.setPen(Qt.NoPen)
-            p.setBrush(QBrush(QColor("#5a2a2a") if bad else base))
-            p.drawRect(rect)
+            g = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+            if bad:
+                g.setColorAt(0, QColor("#ab5961")); g.setColorAt(1, QColor("#843f4c"))
+            elif is_video:
+                g.setColorAt(0, QColor("#2488a6")); g.setColorAt(1, QColor("#1a627f"))
+            else:
+                g.setColorAt(0, QColor("#267c94")); g.setColorAt(1, QColor("#165b75"))
+            path = QPainterPath(); path.addRoundedRect(rect, 4, 4)
+            p.setPen(Qt.NoPen); p.setBrush(QBrush(g)); p.drawPath(path)
+            p.setRenderHint(QPainter.Antialiasing, False)
             pk = self.state.peaks.get(c.media_id)
             if pk is not None:
-                self._draw_wave(p, pk, c, rect, QColor("#b86a6a") if bad else wave_color)
-            pen = QPen(QColor("white") if c.media_id == self.selected else QColor(theme.RED if bad else "#0b0d0f"), 2 if c.media_id == self.selected or bad else 1)
+                self._draw_wave(p, pk, c, rect.adjusted(0, 12, 0, 0), QColor("#ffc9cc") if bad else QColor("#8beaff"))
+            p.setRenderHint(QPainter.Antialiasing, True)
+            sel = c.media_id == self.selected
+            pen = QPen(QColor("#d1f6ff") if sel else QColor("#e37a82" if bad else "#41b2cc"), 2 if sel else 1)
             if bad:
                 pen.setStyle(Qt.DashLine)
-            p.setPen(pen)
-            p.setBrush(Qt.NoBrush)
-            p.drawRect(rect)
+            p.setPen(pen); p.setBrush(Qt.NoBrush); p.drawPath(path)
             if rect.width() > 40:
-                p.setFont(font)
-                p.setPen(QColor("white"))
-                p.drawText(rect.adjusted(4, 1, -2, 0), Qt.AlignTop | Qt.AlignLeft, c.name + ("  ⚠ not synced" if bad else ""))
+                f = QFont(font); f.setPointSize(8); p.setFont(f)
+                p.setPen(QColor("#ffe1e3" if bad else "#b7efff"))
+                p.drawText(rect.adjusted(6, 4, -3, 0), Qt.AlignTop | Qt.AlignLeft, c.name + ("  ⚠ not synced" if bad else ""))
             if c.confidence in ("Medium", "Low") and not bad:     # review marker
                 p.setBrush(QBrush(QColor(theme.ORANGE))); p.setPen(Qt.NoPen)
-                p.drawPolygon(QPolygonF([QPointF(rect.right() - 10, rect.top()), QPointF(rect.right(), rect.top()), QPointF(rect.right(), rect.top() + 10)]))
+                p.drawPolygon(QPolygonF([QPointF(rect.right() - 11, rect.top() + 1), QPointF(rect.right() - 1, rect.top() + 1), QPointF(rect.right() - 1, rect.top() + 11)]))
         p.restore()
 
 
 class TimelinePanel(QWidget):
-    """TimelineView + zoom controls + horizontal scrollbar + 'N/M clips synchronized' bar."""
+    """Timeline toolbar + TimelineView + horizontal scrollbar + 'N/M clips synchronized' bar."""
 
     def __init__(self, state: ProjectState) -> None:
         super().__init__()
@@ -276,29 +321,39 @@ class TimelinePanel(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        bar = QHBoxLayout()
-        bar.setContentsMargins(6, 4, 6, 4)
-        head = QLabel("TIMELINE"); head.setObjectName("heading")
-        self.time_label = QLabel("00:00:00.00")
-        bar.addWidget(head); bar.addStretch(1); bar.addWidget(self.time_label)
-        for text, tip, fn in (("−", "Zoom out", lambda: self.view.zoom(0.7)), ("+", "Zoom in", lambda: self.view.zoom(1.43)),
+        barw = QFrame(); barw.setObjectName("timelinebar")
+        bar = QHBoxLayout(barw)
+        bar.setContentsMargins(24, 9, 20, 9)
+        bar.setSpacing(12)
+        head = QLabel("Synchronization Timeline"); head.setStyleSheet("font-size:13px; font-weight:700; background:transparent;")
+        self.count_label = QLabel("0 tracks"); self.count_label.setObjectName("count")
+        self.time_label = QLabel("00:00:00.00"); self.time_label.setStyleSheet("color:#8393a7; background:transparent;")
+        bar.addWidget(head); bar.addWidget(self.count_label); bar.addStretch(1); bar.addWidget(self.time_label)
+        for text, tip, fn in (("−", "Zoom out", lambda: self.view.zoom(0.7)), ("＋", "Zoom in", lambda: self.view.zoom(1.43)),
                               ("Fit", "Fit whole timeline", self.view.fit)):
-            b = QPushButton(text); b.setToolTip(tip); b.setFixedWidth(40 if text != "Fit" else 46); b.clicked.connect(fn)
+            b = QPushButton(text); b.setObjectName("tool"); b.setToolTip(tip); b.clicked.connect(fn)
             bar.addWidget(b)
-        lay.addLayout(bar)
+        lay.addWidget(barw)
         lay.addWidget(self.view, 1)
         self.sb = QScrollBar(Qt.Horizontal)
         self.sb.valueChanged.connect(lambda v: self.view.set_scroll(v / 100.0))
         lay.addWidget(self.sb)
         self.status = QLabel()
         self.status.setAlignment(Qt.AlignCenter)
-        self.status.setFixedHeight(26)
+        self.status.setFixedHeight(28)
         lay.addWidget(self.status)
         self.view.view_changed.connect(self._sync_scrollbar)
         self.view.playhead_changed.connect(lambda t: self.time_label.setText(fmt_time(t, True)))
         state.timeline_changed.connect(self.update_status)
         state.timeline_changed.connect(self._sync_scrollbar)
+        state.media_changed.connect(self._update_count)
+        state.timeline_changed.connect(self._update_count)
         self.update_status()
+        self._update_count()
+
+    def _update_count(self) -> None:
+        n = len(self.view.lane_info())
+        self.count_label.setText(f"{n} track" + ("" if n == 1 else "s"))
 
     def _sync_scrollbar(self) -> None:
         total = self.view.total_seconds()
@@ -312,10 +367,10 @@ class TimelinePanel(QWidget):
     def update_status(self) -> None:
         tl = self.state.timeline
         if tl is None:
-            text, color = "Not analyzed yet", theme.PANEL_ALT
+            text, bg, fg, edge = "Not analyzed yet", "#131d2a", "#8393a7", "#263344"
         else:
             ok, total = tl.counts
             text = f"{ok}/{total} Clips Synchronized" + ("" if ok == total else f"  ·  {total - ok} need review")
-            color = theme.TEAL_DARK if ok == total else "#9a5a1c"
+            bg, fg, edge = (("#163d34", "#91f3cf", "#327a66") if ok == total else ("#40290f", "#ffca83", "#8a5a1f"))
         self.status.setText(text)
-        self.status.setStyleSheet(f"background:{color}; color:white; font-weight:600;")
+        self.status.setStyleSheet(f"background:{bg}; color:{fg}; font-weight:600; border-top:1px solid {edge};")

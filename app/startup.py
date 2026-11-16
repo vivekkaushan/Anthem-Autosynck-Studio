@@ -21,6 +21,8 @@ def run(argv: list[str]) -> int:
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(__version__)
     app.setOrganizationName("AutoSyncStudio")
+    from ui.chrome import app_icon
+    app.setWindowIcon(app_icon())
 
     def show_error(kind: str, message: str) -> None:
         if QApplication.instance() is not None and not os.environ.get("AUTOSYNC_HEADLESS"):

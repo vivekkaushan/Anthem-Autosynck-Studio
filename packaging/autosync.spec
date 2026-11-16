@@ -14,7 +14,7 @@ for name in ("ffmpeg", "ffprobe"):
         binaries.append((str(p), "third_party/ffmpeg"))
     else:
         print(f"WARNING: {p} not found - the build will NOT contain {name}")
-datas = [(str(ROOT / "THIRD_PARTY_NOTICES.md"), ".")]
+datas = [(str(ROOT / "THIRD_PARTY_NOTICES.md"), "."), (str(ROOT / "resources"), "resources")]
 for lic in (ROOT / "third_party" / "ffmpeg").glob("LICENSE*"):
     datas.append((str(lic), "third_party/ffmpeg"))
 
@@ -29,12 +29,14 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="AutoSyncStudio", console=False, debug=False,
-          strip=False, upx=False)
+          strip=False, upx=False,
+          icon=str(ROOT / "resources" / "anthem_app_icon.ico") if sys.platform == "win32" else None)
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="AutoSyncStudio")
 
 if sys.platform == "darwin":
     app = BUNDLE(coll, name="AutoSync Studio.app", bundle_identifier="com.autosyncstudio.app",
-                 info_plist={"CFBundleName": "AutoSync Studio", "CFBundleDisplayName": "AutoSync Studio",
+                 icon=str(ROOT / "resources" / "anthem_app_icon.icns"),
+                 info_plist={"CFBundleName": "Anthem Auto Synck", "CFBundleDisplayName": "Anthem Auto Synck Studio",
                              "CFBundleShortVersionString": "0.1.0", "NSHighResolutionCapable": True,
                              "LSMinimumSystemVersion": "11.0",
                              "NSDesktopFolderUsageDescription": "AutoSync Studio reads media you choose.",

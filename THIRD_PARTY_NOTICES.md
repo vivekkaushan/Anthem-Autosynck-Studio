@@ -1,6 +1,6 @@
 # Third-party software
 
-AutoSync Studio bundles or uses the following. Each remains under its own licence.
+Anthem Auto Synck Studio bundles or uses the following. Each remains under its own licence.
 
 | Component | Licence | Notes |
 |---|---|---|

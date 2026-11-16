@@ -32,16 +32,18 @@ def test_master_only_audio_and_exclusive(tmp_path):
 def test_main_window_builds_and_lanes(qapp, tmp_path):
     from ui.main_window import MainWindow
     w = MainWindow(Config(), check_dependencies())
-    names = [a.text().replace("&&", "&") for a in w._actions]
-    assert names == ["New Project", "Open Project", "Save Project", "Import Media", "Import Folder", "Add Camera", "Add Audio",
-                     "Set Master Audio", "Analyze & Sync", "Cancel Analysis", "Manual Offset", "Preview Sync",
-                     "Export Premiere XML"]
+    # header buttons are bound to actions; pending phases stay disabled and say so
+    assert not w.a_export.isEnabled() and not w.a_save.isEnabled() and not w.a_open.isEnabled()
+    assert "Not available yet" in w.a_export.toolTip()
+    assert [w.summary.t_tracks.value.text(), w.summary.t_clips.value.text()] == ["0", "0"]
     for n in ("c1.mp4", "c2.mp4", "m.wav", "s.wav"):
         (tmp_path / n).write_bytes(b"0")
     added, _ = w.state.add_files([str(tmp_path / n) for n in ("c1.mp4", "c2.mp4", "m.wav", "s.wav")])
     w.state.set_master(added[3].id)
     assert w.timeline.lanes() == [("V1", "CAM 01"), ("V2", "CAM 02"), ("A1", "Master Audio"), ("A2", "AUDIO 01")]
     assert w.a_master.isEnabled()
+    assert [w.summary.t_tracks.value.text(), w.summary.t_clips.value.text()] == ["4", "4"]
+    assert w.summary.chip.text() == "READY TO SYNC"
     assert w.windowTitle().startswith("Untitled Project*")
     w.library.tree.topLevelItem(0).child(0).setSelected(True)
     assert w.inspector.fields["Role"].text() == "CAM 01"

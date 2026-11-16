@@ -108,3 +108,31 @@ def test_view_zoom_scroll_and_hit_testing(qapp):
     v.mousePressEvent(ev)
     assert picked == [cam.id] and v.selected == cam.id
     v.grab()                                                               # paints without error
+
+
+def test_waveform_is_actually_drawn(qapp):
+    """Regression: the min/max reduction used to raise at the clip end and silently draw nothing."""
+    from fractions import Fraction
+    from PySide6.QtCore import QRectF
+    from PySide6.QtGui import QColor, QImage, QPainter
+    from app.state import ProjectState
+    from ui.timeline_view import TimelineView
+
+    class C:
+        start = Fraction(0)
+        source_in = Fraction(0)
+
+    view = TimelineView(ProjectState())
+    view.resize(900, 300)
+    view.px_per_sec = 10
+    peaks = np.tile(np.array([[-0.2, 0.2]], dtype=np.float32), (1500, 1))      # 30 s, constant amplitude
+    img = QImage(900, 300, QImage.Format_ARGB32)
+    base = QColor("#1a627f")
+    img.fill(base)
+    p = QPainter(img)
+    view._draw_wave(p, peaks, C, QRectF(210, 60, 290, 31), QColor("#8beaff"))   # covers the whole 30 s (300 px) incl. last column
+    p.end()
+    arr = np.frombuffer(img.bits(), np.uint8).reshape(300, 900, 4)
+    drawn = (arr != np.array([base.blue(), base.green(), base.red(), 255])).any(axis=2)
+    assert drawn[:, 210:500].sum() > 300          # many columns got a line
+    assert drawn[:, 495:500].any()                # including the very last columns
