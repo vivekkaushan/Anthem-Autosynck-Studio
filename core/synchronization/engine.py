@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -63,35 +65,63 @@ def synchronize(inputs: list[SyncInput], master_id: str, ffmpeg: str, cache_dir:
     results: dict[str, SyncResult] = {master_id: SyncResult(master_id, master_id, "reference", confidence="High", windows_verified=0)}
     audio: dict[str, AnalysisAudio] = {}
     n = len(inputs)
-    for k, item in enumerate(inputs):
+    workers = max(1, min(4, os.cpu_count() or 1))   # decoding is I/O + CPU bound; a few in parallel hides NAS latency
+
+    def extract_one(item: SyncInput):
         if token.cancelled:
             raise Cancelled()
-        progress(int(35 * k / n), f"Extracting audio: {item.name}")
         if item.stream_index is None:
-            results[item.id] = SyncResult(item.id, master_id, "waveform", notes=["No audio stream in this file"])
-            continue
+            return item, None, "No audio stream in this file"
         try:
-            audio[item.id] = extract_analysis_audio(item.path, item.stream_index, ffmpeg, cache_dir, rate, token)
+            a = extract_analysis_audio(item.path, item.stream_index, ffmpeg, cache_dir, rate, token)
         except MediaError as exc:
-            results[item.id] = SyncResult(item.id, master_id, "waveform", notes=[str(exc)])
-            continue
-        if audio[item.id].silent:
-            results[item.id] = SyncResult(item.id, master_id, "waveform", notes=["Recording is silent"])
-            del audio[item.id]
+            return item, None, str(exc)
+        return item, (None if a.silent else a), ("Recording is silent" if a.silent else "")
+
+    done = 0
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(extract_one, i) for i in inputs]
+        try:
+            for fut in as_completed(futures):
+                item, a, note = fut.result()
+                done += 1
+                progress(int(35 * done / n), f"Extracted audio {done}/{n}: {item.name}")
+                if a is None:
+                    results[item.id] = SyncResult(item.id, master_id, "waveform", notes=[note])
+                else:
+                    audio[item.id] = a
+        except BaseException:
+            for f in futures:
+                f.cancel()
+            raise
+    if token.cancelled:
+        raise Cancelled()
     if master_id not in audio:
         raise MediaError("Master audio could not be decoded or is silent: " + "; ".join(results[master_id].notes or ["unknown"]))
     targets = [i for i in inputs if i.id != master_id and i.id in audio]
     pairs: dict[tuple[str, str], PairResult] = {}
-    for k, item in enumerate(targets):
+
+    def correlate_one(item: SyncInput):
         if token.cancelled:
             raise Cancelled()
-        base = 35 + int(55 * k / max(1, len(targets)))
-        span = 55 / max(1, len(targets))
-        progress(base, f"Synchronizing {item.name} to master")
-        r = correlate_pair(audio[master_id].path, audio[item.id].path, token=token,
-                           progress=lambda p, m, b=base, s=span, nm=item.name: progress(int(b + s * p / 100), f"{nm}: {m}"))
-        pairs[(master_id, item.id)] = r
-        results[item.id] = _from_pair(item.id, master_id, "waveform", r)
+        return item, correlate_pair(audio[master_id].path, audio[item.id].path, token=token)
+
+    done = 0
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(correlate_one, i) for i in targets]
+        try:
+            for fut in as_completed(futures):
+                item, r = fut.result()
+                done += 1
+                progress(35 + int(55 * done / max(1, len(targets))), f"Synchronized {done}/{len(targets)}: {item.name}")
+                pairs[(master_id, item.id)] = r
+                results[item.id] = _from_pair(item.id, master_id, "waveform", r)
+        except BaseException:
+            for f in futures:
+                f.cancel()
+            raise
+    if token.cancelled:
+        raise Cancelled()
     # Fallback: weak/failed items are matched against recordings that already synced. Candidates are ordered by
     # clock hint proximity (hints never decide an offset, only which pairs are tried first) and capped, so
     # large camera-only projects stay tractable. Repeated passes let chains grow (A->master, B->A, C->B).

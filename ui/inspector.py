@@ -4,6 +4,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import QFormLayout, QLabel, QTableWidget, QTabWidget, QVBoxLayout, QWidget
 
 from app.state import ProjectState
+from ui.review import ReviewPanel
 
 SYNC_COLUMNS = ["Source", "Offset (s)", "Confidence", "Corr.", "Windows", "Drift (ppm)", "Status"]
 
@@ -25,8 +26,11 @@ class Inspector(QTabWidget):
         self.results.setSelectionBehavior(QTableWidget.SelectRows)
         self.results.horizontalHeader().setStretchLastSection(True)
         self.addTab(self.results, "Sync Results")
+        self.review = ReviewPanel(state)
+        self.addTab(self.review, "Review")
 
     def show_media(self, media_id: str) -> None:
+        self.review.set_media(media_id)
         m = self.state.get(media_id) if media_id else None
         for v in self.fields.values():
             v.setText("—")
@@ -51,7 +55,7 @@ class Inspector(QTabWidget):
         """Fill the Sync Results table. `results` maps media id -> SyncResult."""
         from PySide6.QtGui import QColor
         from PySide6.QtWidgets import QTableWidgetItem
-        colors = {"High": "#3fb37f", "Medium": "#e8913a", "Low": "#d9534f", "Failed": "#d9534f"}
+        colors = {"High": "#3fb37f", "Medium": "#e8913a", "Manual": "#39c6ec", "Low": "#d9534f", "Failed": "#d9534f"}
         self.results.setRowCount(0)
         for mid, r in results.items():
             m = self.state.get(mid)

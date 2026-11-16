@@ -194,7 +194,7 @@ class BottomBar(QFrame):
         self.b_prev = QPushButton("⏮"); self.b_prev.setObjectName("circle"); self.b_prev.setToolTip("Jump to previous clip start")
         self.b_play = QPushButton("▶"); self.b_play.setObjectName("circle")
         self.b_play.setEnabled(False)
-        self.b_play.setToolTip("Playback arrives with the preview pane")
+        self.b_play.setToolTip("Synchronize first, then select a clip and play it with the reference")
         self.b_next = QPushButton("⏭"); self.b_next.setObjectName("circle"); self.b_next.setToolTip("Jump to next clip start")
         self.b_prev.clicked.connect(self.prev_clicked)
         self.b_next.clicked.connect(self.next_clicked)

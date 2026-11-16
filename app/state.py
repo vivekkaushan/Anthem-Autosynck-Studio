@@ -124,7 +124,8 @@ class ProjectState(QObject):
             self.changed.emit()
 
     def rebuild_timeline(self) -> None:
-        self.timeline = build_timeline(self.media, self.sync_results) if self.sync_results else None
+        has_clips = any(getattr(m.info, "duration", None) is not None for m in self.media)
+        self.timeline = build_timeline(self.media, self.sync_results) if has_clips else None
         self.timeline_changed.emit()
 
     def set_sync_results(self, results: dict) -> None:

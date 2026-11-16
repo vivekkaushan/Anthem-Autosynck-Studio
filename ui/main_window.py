@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QByteArray, Qt, QUrl
 from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices
-from PySide6.QtWidgets import (QFileDialog, QMainWindow, QMenu, QMessageBox, QPushButton, QSplitter, QToolButton,
+from PySide6.QtWidgets import (QApplication, QFileDialog, QMainWindow, QMenu, QMessageBox, QPushButton, QSplitter, QToolButton,
                                QVBoxLayout, QWidget, QHBoxLayout)
 
 from app import APP_NAME
@@ -20,6 +20,7 @@ from core.synchronization.engine import SyncInput
 from app.paths import cache_dir
 from ui.chrome import BottomBar, HeaderBar, Rail, SummaryBar, app_icon
 from ui.inspector import Inspector
+from ui.player import SyncPlayer
 from ui.media_library import MediaLibrary
 from ui.timeline_view import TimelinePanel, fmt_time
 from workers.update_worker import make_update_job
@@ -64,6 +65,11 @@ class MainWindow(QMainWindow):
         self.timeline.clip_selected.connect(self._on_selection)
         self.inspector = Inspector(self.state)
         self.library.selection_changed.connect(self._on_selection)
+        self.player = SyncPlayer()
+        self.player.position_changed.connect(self._on_play_position)
+        self.player.stopped.connect(self._on_play_stopped)
+        self.player.failed.connect(lambda msg: self.set_status(f"Playback failed: {msg}"))
+        self.inspector.review.listen_requested.connect(self.toggle_play)
 
         self.hsplit = QSplitter(Qt.Horizontal)
         for w in (self.library, self.timeline_panel, self.inspector):
@@ -83,6 +89,7 @@ class MainWindow(QMainWindow):
         self.bottom.prev_clicked.connect(lambda: self._jump(-1))
         self.bottom.next_clicked.connect(lambda: self._jump(+1))
         self.timeline.playhead_changed.connect(self._on_playhead)
+        self.bottom.b_play.clicked.connect(self.toggle_play)
 
         col = QWidget()
         cl = QVBoxLayout(col)
@@ -140,7 +147,7 @@ class MainWindow(QMainWindow):
                                 "Contact GitHub once at startup to see whether a newer version exists (nothing else is sent)")
         self.a_auto_updates.setCheckable(True)
         self.a_auto_updates.setChecked(self.config.check_updates)
-        self.a_export = A("Export Timeline ↗", self._noop, "Export FCP7 XML for Premiere Pro", pending="XML export, Phase 8")
+        self.a_export = A("Export Timeline ↗", self.export_timeline, "Export the synchronized timeline as XML for Premiere Pro")
 
     def _bind(self, btn: QPushButton, action: QAction) -> QPushButton:
         btn.clicked.connect(action.trigger)
@@ -201,7 +208,7 @@ class MainWindow(QMainWindow):
 
     def _restore_state(self) -> None:
         tl = self.state.timeline
-        if tl is None:
+        if tl is None or not self.state.sync_results:
             self._set_state("ready", "Ready")
         else:
             ok, total = tl.counts
@@ -225,10 +232,10 @@ class MainWindow(QMainWindow):
             s.t_conf.set_value(f"{pct}% High", "#69d5a5" if high == len(results) else "#ffb45c")
         else:
             s.t_conf.set_value("—")
-        s.t_dur.set_value(fmt_time(float(tl.duration)) if tl is not None else "—")
+        s.t_dur.set_value(fmt_time(float(tl.duration)) if tl is not None and st.sync_results else "—")
         if self._sync_job is not None:
             chip = "ANALYZING"
-        elif tl is not None:
+        elif tl is not None and st.sync_results:
             ok, total = tl.counts
             chip = "SYNCHRONIZED" if ok == total else "NEEDS REVIEW"
         else:
@@ -310,9 +317,51 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, APP_NAME, "Could not check for updates. Are you online?\n\n" + msg)
 
     def _open_update(self) -> None:
-        if self._update_info is not None:
-            QDesktopServices.openUrl(QUrl(self._update_info.download_url))
-            self.set_status(f"Downloading version {self._update_info.version} in your browser. Open it when it finishes.")
+        info = self._update_info
+        if info is None:
+            return
+        from core.selfupdate import install_context
+        ctx = install_context()
+        if ctx is None or not info.asset_url or getattr(self, "_install_job", None) is not None or self._sync_job is not None:
+            QDesktopServices.openUrl(QUrl(info.download_url))
+            self.set_status(f"Downloading version {info.version} in your browser. Open it when it finishes.")
+            return
+        if QMessageBox.question(self, APP_NAME, f"Install version {info.version} now?\n\nThe update downloads inside the app, "
+                                "then Anthem Auto Synck Studio closes and reopens by itself.\nUnsaved work is not kept.") != QMessageBox.Yes:
+            return
+        from workers.update_worker import make_install_job
+        job = make_install_job(info.asset_url, ctx)
+        job.progress.connect(self._on_progress)
+        job.finished.connect(self._on_update_ready)
+        job.failed.connect(self._on_install_failed)
+        job.cancelled.connect(self._on_install_failed)
+        job.done.connect(self._on_job_done)
+        self._install_job = job
+        self._jobs.append(job)
+        self.b_update.setEnabled(False)
+        self._set_state("busy", "Updating")
+        job.start()
+
+    def _on_update_ready(self, script) -> None:
+        from core.selfupdate import launch
+        self._install_job = None
+        self.set_status("Installing the update… the app will reopen")
+        try:
+            launch(script)
+        except OSError as exc:
+            self._on_install_failed(str(exc))
+            return
+        self.state.dirty = False
+        QApplication.quit()
+
+    def _on_install_failed(self, msg: str = "") -> None:
+        self._install_job = None
+        self.b_update.setEnabled(True)
+        self._restore_state()
+        info = self._update_info
+        self.set_status("Update failed" + (f": {msg}" if msg else "") + ". Opening the download page instead.")
+        if info is not None:
+            QDesktopServices.openUrl(QUrl(info.download_url))
 
     def _help(self) -> None:
         QMessageBox.information(self, APP_NAME, "1. Add Media → Import Folder (Camera 1, Camera 2, Audio 1…)\n"
@@ -331,6 +380,8 @@ class MainWindow(QMainWindow):
         ready = len(self.state.media) >= 2 and bool(with_audio)
         self.a_sync.setEnabled(not running and ready)
         self.a_cancel.setEnabled(running)
+        self.bottom.b_play.setEnabled(bool(self.state.sync_results) and self.state.timeline is not None)
+        self.a_export.setEnabled(bool(self.state.sync_results) and self.state.timeline is not None and not running)
         self.b_cancel.setVisible(running)
         tip = "Analyze and synchronize all recordings using their audio (camera microphones are fine)"
         if len(self.state.media) < 2:
@@ -349,6 +400,67 @@ class MainWindow(QMainWindow):
         self.inspector.show_media(media_id)
         m = self.state.get(media_id) if media_id else None
         self.bottom.selection.setText(f"{m.name} • {m.role}" if m else "Select a clip to inspect it")
+
+    # ---- playback (audio, clip + reference) -----------------------------------------
+    def toggle_play(self, *_args) -> None:
+        if self.player.playing:
+            self.player.stop()
+            return
+        tl, st = self.state.timeline, self.state
+        mid = self.timeline.selected or self.library.selected_id()
+        if tl is None or not st.sync_results:
+            self.set_status("Synchronize first, then select a clip to play it")
+            return
+        clip = tl.clip_for(mid) if mid else None
+        if clip is None:
+            self.set_status("Select a clip on the timeline to play it")
+            return
+        m = st.get(mid)
+        wav = SyncPlayer.wav_for(m)
+        if wav is None:
+            self.set_status("This clip has no prepared audio to play")
+            return
+        t = self.timeline.playhead
+        if not (clip.start <= t < clip.end):
+            t = float(clip.start)
+        parts = [(wav, t - float(clip.start) + float(clip.source_in), float(clip.start - clip.source_in))]
+        ref = next((x for x in st.media if x.is_master and x.id != mid), None)
+        rclip = tl.clip_for(ref.id) if ref else None
+        rwav = SyncPlayer.wav_for(ref) if ref else None
+        if clip.synced and rclip is not None and rwav is not None and rclip.start <= t < rclip.end:
+            parts.append((rwav, t - float(rclip.start) + float(rclip.source_in), float(rclip.start - rclip.source_in)))
+        if not self.player.play(parts):
+            self.set_status("Could not start playback")
+            return
+        self.bottom.b_play.setText("⏸")
+        self.set_status("Playing " + (f"{m.name} with the reference" if len(parts) > 1 else m.name))
+
+    def _on_play_position(self, t: float) -> None:
+        self.timeline.jump_to(t)
+
+    def _on_play_stopped(self) -> None:
+        self.bottom.b_play.setText("▶")
+
+    def export_timeline(self) -> None:
+        from core.export.fcp7 import ExportError, export_xmeml
+        tl = self.state.timeline
+        if tl is None or not self.state.sync_results:
+            QMessageBox.information(self, APP_NAME, "Synchronize first, then export.")
+            return
+        default = str(Path(self.config.last_media_dir or str(Path.home())) / f"{self.state.name or 'Anthem Sequence'}.xml")
+        path, _ = QFileDialog.getSaveFileName(self, "Export Timeline (Premiere Pro XML)", default, "Final Cut Pro XML (*.xml)")
+        if not path:
+            return
+        if not path.lower().endswith(".xml"):
+            path += ".xml"
+        try:
+            xml, skipped = export_xmeml(tl, self.state.media, Path(path).stem)
+            Path(path).write_text(xml, encoding="utf-8")
+        except (ExportError, OSError) as exc:
+            QMessageBox.warning(self, APP_NAME, f"Export failed: {exc}")
+            return
+        note = f" {len(skipped)} unsynchronized clip(s) were left out." if skipped else ""
+        self.set_status(f"Exported {Path(path).name}.{note} In Premiere: File → Import.")
 
     def _noop(self) -> None:  # only reachable if a pending action is enabled by mistake
         log.error("Triggered an unimplemented action")
@@ -478,13 +590,15 @@ class MainWindow(QMainWindow):
                 self.state.set_probe(mid, r)
         self.set_status(f"Probed {len(results)} file(s)" + (f", {bad} with problems (see Inspector)" if bad else ""))
         self.inspector.show_media(self.library.selected_id())
+        if not self.state.sync_results:
+            self.timeline.fit()
 
     def _job_done(self, job) -> None:
         job.wait()   # safe: runs on the UI thread, after the worker thread has been asked to quit
         if job in self._jobs:
             self._jobs.remove(job)
         if not self._jobs:
-            if self.state.timeline is None:
+            if not self.state.sync_results:
                 self.progress.setValue(0)
             self._restore_state()
 

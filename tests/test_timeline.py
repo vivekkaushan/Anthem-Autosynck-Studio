@@ -52,7 +52,7 @@ def test_unsynced_clips_are_flagged_not_guessed():
     low = item("l.mp4", MediaKind.VIDEO, "CAM 02", 50)
     never = item("n.mp4", MediaKind.VIDEO, "CAM 03", 50)
     tl = build_timeline([master, good, low, never], {good.id: res(good, 5), low.id: res(low, 99, "Low")})
-    assert tl.clip_for(low.id).synced is False and tl.clip_for(low.id).start == 0   # Low, unconfirmed: not placed at 99
+    assert tl.clip_for(low.id).synced is False and tl.clip_for(low.id).start != 99   # Low, unconfirmed: parked after the synced area, not placed at 99
     assert tl.clip_for(never.id).confidence == "Not analyzed"
     assert tl.counts == (1, 3)
     low_res = res(low, 99, "Low"); low_res.confirmed = True                        # user confirmed -> placed
@@ -136,3 +136,30 @@ def test_waveform_is_actually_drawn(qapp):
     drawn = (arr != np.array([base.blue(), base.green(), base.red(), 255])).any(axis=2)
     assert drawn[:, 210:500].sum() > 300          # many columns got a line
     assert drawn[:, 495:500].any()                # including the very last columns
+
+
+def test_imported_clips_appear_on_their_camera_lane_before_sync():
+    a1, a2 = item("a1.mp4", MediaKind.VIDEO, "CAM 01", 50), item("a2.mp4", MediaKind.VIDEO, "CAM 01", 30)
+    b1 = item("b1.mp4", MediaKind.VIDEO, "CAM 02", 40)
+    tl = build_timeline([a1, a2, b1], {})
+    lanes = {t.title: t for t in tl.tracks}
+    assert [c.name for c in lanes["CAM 01"].clips] == ["a1.mp4", "a2.mp4"] and len(lanes["CAM 02"].clips) == 1
+    c1, c2 = lanes["CAM 01"].clips
+    assert c1.start == 0 and c2.start == c1.end and not c1.synced      # end to end, flagged, never guessed
+
+
+def test_manual_offset_and_accept_match_place_clips():
+    from app.state import ProjectState
+    s = ProjectState()
+    m = item("m.wav", MediaKind.AUDIO, "AUDIO 01", 300, master=True)
+    low = item("l.mp4", MediaKind.VIDEO, "CAM 01", 50)
+    none = item("n.mp4", MediaKind.VIDEO, "CAM 02", 50)
+    s.media = [m, low, none]
+    s.sync_results = {low.id: res(low, 99, "Low")}
+    s.rebuild_timeline()
+    assert not s.timeline.clip_for(low.id).synced
+    assert s.accept_match(low.id) and s.timeline.clip_for(low.id).start == 99
+    assert s.set_manual_offset(none.id, 12.5)
+    c = s.timeline.clip_for(none.id)
+    assert c.synced and c.confidence == "Manual" and c.start == Fraction(25, 2)
+    assert not s.set_manual_offset(m.id, 3)      # the reference cannot be moved
