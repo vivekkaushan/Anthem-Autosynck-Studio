@@ -4,8 +4,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, Qt
-from PySide6.QtGui import QAction, QCloseEvent
+from PySide6.QtCore import QByteArray, Qt, QUrl
+from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (QFileDialog, QMainWindow, QMenu, QMessageBox, QPushButton, QSplitter, QToolButton,
                                QVBoxLayout, QWidget, QHBoxLayout)
 
@@ -22,7 +22,9 @@ from ui.chrome import BottomBar, HeaderBar, Rail, SummaryBar, app_icon
 from ui.inspector import Inspector
 from ui.media_library import MediaLibrary
 from ui.timeline_view import TimelinePanel, fmt_time
+from workers.update_worker import make_update_job
 from workers.waveform_worker import make_peaks_job
+from app import __version__
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +40,8 @@ class MainWindow(QMainWindow):
         self.state = ProjectState()
         self._jobs: list = []
         self._sync_job = None
+        self._update_job = None
+        self._update_manual = False
         self.setMinimumSize(1000, 640)
         self.resize(1440, 860)
         self.setWindowIcon(app_icon())
@@ -119,6 +123,11 @@ class MainWindow(QMainWindow):
         self.a_master = A("Set Master Audio", self.set_master, "Use the selected audio file as the sync reference")
         self.a_sync = A("⚡ Synchronize", self.analyze, "Analyze and synchronize all recordings to the master audio")
         self.a_cancel = A("Cancel", self.cancel_analysis, "Cancel the running analysis")
+        self.a_updates = A("Check for Updates…", self.check_updates_now, "Look for a newer version on GitHub")
+        self.a_auto_updates = A("Check for updates at startup", self._toggle_auto_updates,
+                                "Contact GitHub once at startup to see whether a newer version exists (nothing else is sent)")
+        self.a_auto_updates.setCheckable(True)
+        self.a_auto_updates.setChecked(self.config.check_updates)
         self.a_export = A("Export Timeline ↗", self._noop, "Export FCP7 XML for Premiere Pro", pending="XML export, Phase 8")
 
     def _bind(self, btn: QPushButton, action: QAction) -> QPushButton:
@@ -144,8 +153,13 @@ class MainWindow(QMainWindow):
 
     def _build_header(self) -> None:
         h = self.header
+        self.b_update = self._mk("", "update")
+        self.b_update.setVisible(False)
+        self.b_update.clicked.connect(self._open_update)
+        self._update_info = None
+        h.add(self.b_update)
         h.add(self._bind(self._mk("New Project", "ghost"), self.a_new))
-        h.add(self._menu_button("Project ▾", [self.a_open, self.a_save]))
+        h.add(self._menu_button("Project ▾", [self.a_open, self.a_save, None, self.a_updates, self.a_auto_updates]))
         h.add(self._menu_button("＋ Add Media ▾", [self.a_import, self.a_folder, self.a_cam, self.a_aud, None, self.a_master]))
         self.b_cancel = self._bind(self._mk("Cancel", "danger"), self.a_cancel)
         h.add(self.b_cancel)
@@ -238,6 +252,55 @@ class MainWindow(QMainWindow):
         else:
             target = min((x for x in starts if x > cur + 0.01), default=cur)
         self.timeline.jump_to(target)
+
+    # ---- updates ---------------------------------------------------------------------------
+    def start_update_check(self, manual: bool = False) -> None:
+        """Ask GitHub whether a newer release exists. Silent when offline unless the user asked (manual)."""
+        if getattr(self, "_update_job", None) is not None:
+            return
+        if not manual and not self.config.check_updates:
+            return
+        self._update_manual = manual
+        job = make_update_job(__version__)
+        job.finished.connect(self._on_update_result)
+        job.failed.connect(self._on_update_failed)
+        job.done.connect(self._on_job_done)
+        self._update_job = job
+        self._jobs.append(job)
+        job.start()
+
+    def check_updates_now(self) -> None:
+        self.start_update_check(manual=True)
+
+    def _toggle_auto_updates(self) -> None:
+        self.config.check_updates = self.a_auto_updates.isChecked()
+
+    def _on_update_result(self, info) -> None:
+        self._update_job = None
+        if info is None:
+            self.b_update.setVisible(False)
+            if self._update_manual:
+                QMessageBox.information(self, APP_NAME, f"You are up to date (version {__version__}).")
+            return
+        self._update_info = info
+        self.b_update.setText(f"⬆ Update to v{info.version}")
+        self.b_update.setToolTip(f"Version {info.version} is available (you have {__version__}).\n"
+                                 + (f"Downloads {info.asset_name}." if info.asset_name else "Opens the release page.")
+                                 + "\nInstall it over the old version; your settings are kept.")
+        self.b_update.setVisible(True)
+        if self._update_manual:
+            self._open_update()
+
+    def _on_update_failed(self, msg: str) -> None:
+        self._update_job = None
+        log.info("Update check failed: %s", msg)
+        if self._update_manual:
+            QMessageBox.information(self, APP_NAME, "Could not check for updates. Are you online?\n\n" + msg)
+
+    def _open_update(self) -> None:
+        if self._update_info is not None:
+            QDesktopServices.openUrl(QUrl(self._update_info.download_url))
+            self.set_status(f"Downloading version {self._update_info.version} in your browser. Open it when it finishes.")
 
     def _help(self) -> None:
         QMessageBox.information(self, APP_NAME, "1. Add Media → Import Folder (Camera 1, Camera 2, Audio 1…)\n"

@@ -25,6 +25,10 @@ FFmpeg is included; there is nothing else to install.
    and every clip is placed on the timeline (one video track per camera, audio tracks below) with its waveform.
    The bar under the timeline shows how many clips are synchronized; unconfirmed clips are marked, never guessed.
 
+## Updates
+
+At startup the app asks GitHub once whether a newer release exists (it sends nothing about you or your media). If there is one, a green **Update to vX** button appears in the top bar; click it to download the installer for your computer, then install it over the old version. Check manually or turn the startup check off under **Project ▾**. The app works fully offline when the check is off or you are not connected.
+
 ## Status
 
 | Area | State |

@@ -5,3 +5,4 @@ soundfile>=0.12
 pytest>=8.0
 # Dev / packaging
 pyinstaller>=6.0
+certifi

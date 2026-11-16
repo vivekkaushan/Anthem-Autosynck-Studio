@@ -46,6 +46,8 @@ QPushButton#primary:hover {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0, st
 QPushButton#primary:disabled {{ background: #131d2a; color: #4f6074; border-color: #223044; }}
 QPushButton#ghost {{ background: #131d2a; }}
 QPushButton#ghost:hover {{ background: #1a2738; }}
+QPushButton#update {{ background: #163d34; border: 1px solid #327a66; color: #91f3cf; }}
+QPushButton#update:hover {{ background: #1c4d41; }}
 QPushButton#danger {{ background: #3a1f26; border-color: #8a3f4a; color: #ffb0b6; }}
 QPushButton#tool {{ background: #1b2837; border: 1px solid #2b3c50; border-radius: 7px; color: #a8bdcf; padding: 5px 10px; font-weight: 500; }}
 QPushButton#tool:hover {{ background: #223347; }}

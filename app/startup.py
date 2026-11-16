@@ -45,6 +45,9 @@ def run(argv: list[str]) -> int:
         if not os.environ.get("AUTOSYNC_HEADLESS"):
             QMessageBox.warning(window, APP_NAME, "Some dependencies are missing:\n\n" + "\n".join(deps.problems()))
 
+    if not os.environ.get("AUTOSYNC_HEADLESS") and not os.environ.get("AUTOSYNC_SMOKE"):
+        window.start_update_check()
+
     if os.environ.get("AUTOSYNC_SMOKE"):  # launch-and-exit mode for automated verification
         from PySide6.QtCore import QTimer
         QTimer.singleShot(int(os.environ.get("AUTOSYNC_SMOKE_MS", "800")), app.quit)

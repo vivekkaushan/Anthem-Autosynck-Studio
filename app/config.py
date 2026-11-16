@@ -20,6 +20,7 @@ class Config:
     ffprobe_path: str = ""
     last_media_dir: str = ""
     window_geometry: str = ""  # base64 Qt geometry
+    check_updates: bool = True  # look for a newer release on GitHub at startup (the only network access the app makes)
 
     @staticmethod
     def path() -> Path:
