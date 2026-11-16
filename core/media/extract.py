@@ -87,3 +87,8 @@ def extract_analysis_audio(src: str, stream_index: int, ffmpeg: str, cache_dir: 
         out.unlink(missing_ok=True)
         raise MediaError(f"No audio samples decoded from {Path(src).name}")
     return audio
+
+
+def analysis_wav_path(src: str, stream_index: int, cache_dir: Path, rate: int = ANALYSIS_RATE) -> Path:
+    """Where the cached analysis file for this source/stream lives (may not exist yet)."""
+    return cache_dir / f"{cache_key(src, stream_index, rate)}.wav"
