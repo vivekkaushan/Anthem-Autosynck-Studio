@@ -1,0 +1,97 @@
+name: Build installers
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to attach files to a Release
+
+env:
+  FFMPEG_VERSION: "7.1"
+  QT_QPA_PLATFORM: offscreen
+  AUTOSYNC_HEADLESS: "1"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Download FFmpeg (LGPL build)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl.zip" -OutFile ff.zip
+          Expand-Archive ff.zip ffx
+          $root = (Get-ChildItem ffx | Select-Object -First 1).FullName
+          New-Item -ItemType Directory -Force third_party/ffmpeg | Out-Null
+          Copy-Item "$root/bin/ffmpeg.exe","$root/bin/ffprobe.exe" third_party/ffmpeg/
+          Get-ChildItem $root -Filter "LICENSE*" | Copy-Item -Destination third_party/ffmpeg/
+          "$PWD/third_party/ffmpeg" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      - run: pip install -r requirements.txt pyinstaller
+      - run: python -m pytest -q
+      - run: pyinstaller packaging/autosync.spec --noconfirm
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path dist/AutoSyncStudio -DestinationPath AutoSyncStudio-Windows.zip
+      - uses: actions/upload-artifact@v4
+        with: { name: AutoSyncStudio-Windows, path: AutoSyncStudio-Windows.zip }
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with: { files: AutoSyncStudio-Windows.zip }
+
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-14, label: AppleSilicon }
+          - { runner: macos-15-intel, label: Intel }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Cache FFmpeg build
+        id: ffcache
+        uses: actions/cache@v4
+        with:
+          path: third_party/ffmpeg
+          key: ffmpeg-${{ env.FFMPEG_VERSION }}-lgpl-${{ matrix.label }}-v1
+      - name: Build FFmpeg from source (LGPL, no GPL/nonfree components)
+        if: steps.ffcache.outputs.cache-hit != 'true'
+        run: |
+          brew install nasm
+          curl -fsSL "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" | tar xJ
+          cd "ffmpeg-${FFMPEG_VERSION}"
+          ./configure --disable-gpl --disable-nonfree --disable-autodetect --enable-zlib \
+            --disable-doc --disable-ffplay --disable-network --disable-debug \
+            --enable-static --disable-shared
+          make -j"$(sysctl -n hw.ncpu)"
+          mkdir -p ../third_party/ffmpeg
+          cp ffmpeg ffprobe ../third_party/ffmpeg/
+          cp COPYING.LGPLv2.1 ../third_party/ffmpeg/LICENSE.LGPLv2.1
+      - run: echo "$PWD/third_party/ffmpeg" >> "$GITHUB_PATH"
+      - run: pip install -r requirements.txt pyinstaller
+      - run: python -m pytest -q
+      - run: pyinstaller packaging/autosync.spec --noconfirm
+      - name: Make .dmg
+        run: |
+          hdiutil create -volname "AutoSync Studio" -srcfolder "dist/AutoSync Studio.app" -ov -format UDZO \
+            "AutoSyncStudio-macOS-${{ matrix.label }}.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AutoSyncStudio-macOS-${{ matrix.label }}
+          path: AutoSyncStudio-macOS-${{ matrix.label }}.dmg
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with: { files: "AutoSyncStudio-macOS-${{ matrix.label }}.dmg" }
+        
