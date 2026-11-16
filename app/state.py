@@ -5,12 +5,14 @@ from PySide6.QtCore import QObject, Signal
 
 from pathlib import Path
 
+from core.timeline.model import Timeline, build_timeline
 from core.media.models import MediaItem, MediaKind, classify, natural_key, role_from_group
 
 
 class ProjectState(QObject):
     changed = Signal()
     media_changed = Signal()
+    timeline_changed = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -19,6 +21,8 @@ class ProjectState(QObject):
         self.dirty = False
         self.media: list[MediaItem] = []
         self.sync_results: dict = {}
+        self.timeline: Timeline | None = None
+        self.peaks: dict = {}          # media id -> ndarray (n, 2) waveform peaks
 
     # -- helpers ---------------------------------------------------------
     def _next_role(self, kind: MediaKind) -> str:
@@ -38,6 +42,7 @@ class ProjectState(QObject):
     def reset(self) -> None:
         self.name, self.path, self.dirty, self.media = "Untitled Project", None, False, []
         self.sync_results = {}
+        self.timeline, self.peaks = None, {}
         self.media_changed.emit()
         self.changed.emit()
 
@@ -71,6 +76,8 @@ class ProjectState(QObject):
     def remove(self, media_id: str) -> None:
         self.media = [m for m in self.media if m.id != media_id]
         self.sync_results.pop(media_id, None)
+        self.peaks.pop(media_id, None)
+        self.rebuild_timeline()
         self._touch()
 
     def set_master(self, media_id: str) -> bool:
@@ -103,10 +110,19 @@ class ProjectState(QObject):
             self.media_changed.emit()
             self.changed.emit()
 
+    def rebuild_timeline(self) -> None:
+        self.timeline = build_timeline(self.media, self.sync_results) if self.sync_results else None
+        self.timeline_changed.emit()
+
     def set_sync_results(self, results: dict) -> None:
         self.sync_results = dict(results)
+        self.rebuild_timeline()
         self.dirty = True
         self.changed.emit()
+
+    def set_peaks(self, peaks: dict) -> None:
+        self.peaks.update(peaks)
+        self.timeline_changed.emit()
 
     def add_folder(self, root: str) -> tuple[list[MediaItem], list[str], list[str]]:
         """Import a folder, keeping its structure: each sub-folder (Camera 1, Camera 2, ...) is one group.

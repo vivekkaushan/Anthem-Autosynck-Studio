@@ -20,7 +20,8 @@ from core.synchronization.engine import SyncInput
 from app.paths import cache_dir
 from ui.inspector import Inspector
 from ui.media_library import MediaLibrary
-from ui.timeline_view import TimelineView
+from ui.timeline_view import TimelinePanel
+from workers.waveform_worker import make_peaks_job
 
 log = logging.getLogger(__name__)
 
@@ -40,12 +41,14 @@ class MainWindow(QMainWindow):
         self.resize(1440, 860)
 
         self.library = MediaLibrary(self.state)
-        self.timeline = TimelineView(self.state)
+        self.timeline_panel = TimelinePanel(self.state)
+        self.timeline = self.timeline_panel.view
+        self.timeline.clip_selected.connect(self._on_selection)
         self.inspector = Inspector(self.state)
         self.library.selection_changed.connect(self._on_selection)
 
         self.hsplit = QSplitter(Qt.Horizontal)
-        for w in (self.library, self.timeline, self.inspector):
+        for w in (self.library, self.timeline_panel, self.inspector):
             self.hsplit.addWidget(w)
         self.hsplit.setStretchFactor(1, 1)
         self.hsplit.setSizes([300, 760, 340])
@@ -178,6 +181,17 @@ class MainWindow(QMainWindow):
         self._refresh_actions()
         job.start()
 
+    def _load_waveforms(self) -> None:
+        items = [(m.id, m.path, m.info.audio[0].index) for m in self.state.media if m.info is not None and m.info.audio]
+        if not items:
+            return
+        job = make_peaks_job(items, cache_dir() / "analysis")
+        job.finished.connect(self.state.set_peaks)
+        job.failed.connect(self._on_job_failed)
+        job.done.connect(self._on_job_done)
+        self._jobs.append(job)
+        job.start()
+
     def cancel_analysis(self) -> None:
         if self._sync_job is not None:
             self._sync_job.cancel()
@@ -186,6 +200,7 @@ class MainWindow(QMainWindow):
     def _on_synced(self, results: dict) -> None:
         self.state.set_sync_results(results)
         self.inspector.show_results(results)
+        self._load_waveforms()
         weak = sum(1 for r in results.values() if not r.usable)
         self.set_status("Synchronization complete" + (f"; {weak} result(s) need review" if weak else ""))
 

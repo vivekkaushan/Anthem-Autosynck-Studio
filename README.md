@@ -21,7 +21,9 @@ FFmpeg is included; there is nothing else to install.
 1. **Import Folder** and choose the folder that holds `Camera 1`, `Camera 2`, `Audio 1`… Each sub-folder becomes one
    group, and all clips inside share one camera track. (Or use *Import Media* / *Add Camera* / *Add Audio*.)
 2. Select your recorder's audio file and click **Set Master Audio**.
-3. Click **Analyze & Sync**. Offsets, confidence (High / Medium / Low), drift and notes appear in **Sync Results**.
+3. Click **Analyze & Sync**. Offsets, confidence (High / Medium / Low), drift and notes appear in **Sync Results**,
+   and every clip is placed on the timeline (one video track per camera, audio tracks below) with its waveform.
+   The bar under the timeline shows how many clips are synchronized; unconfirmed clips are marked, never guessed.
 
 ## Status
 
@@ -31,7 +33,8 @@ FFmpeg is included; there is nothing else to install.
 | Audio extraction + cache | Done |
 | Waveform sync (offset, drift, confidence, camera-to-camera fallback) | Done, tested on synthetic audio (error ≈ 0.02 ms) |
 | Timecode sync, audio fingerprint fallback | Planned |
-| Timeline with waveforms, manual offsets | Planned |
+| Timeline with waveform clips, zoom, playhead, sync status bar | Done |
+| Preview pane, manual offset adjustment | Planned |
 | Premiere XML export | Planned |
 | Save / open projects | Planned |
 
