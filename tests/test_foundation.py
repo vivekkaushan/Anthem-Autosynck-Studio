@@ -36,12 +36,24 @@ def test_dependency_report_finds_tools():
     assert r.ffmpeg and r.ffprobe, r.problems()
 
 
-def test_dependency_report_reports_missing(monkeypatch):
+def test_dependency_report_reports_missing(monkeypatch, tmp_path):
+    # Isolate from the machine: no PATH lookup, and an empty "bundled" third_party directory.
     monkeypatch.setattr("app.dependencies.shutil.which", lambda n: None)
-    monkeypatch.setattr("app.dependencies.find_binary.__defaults__", ("",))
+    monkeypatch.setattr("app.dependencies.resource_root", lambda: tmp_path)
     r = check_dependencies("/nonexistent/ffmpeg", "/nonexistent/ffprobe")
-    # bundled third_party dir is empty in the repo, PATH lookup disabled
-    assert not r.ok and any("FFmpeg" in p for p in r.problems())
+    assert not r.ok and any("FFmpeg" in p for p in r.problems()) and any("FFprobe" in p for p in r.problems())
+
+
+def test_bundled_ffmpeg_is_preferred_over_path(monkeypatch, tmp_path):
+    import sys
+    exe = ".exe" if sys.platform == "win32" else ""
+    d = tmp_path / "third_party" / "ffmpeg"; d.mkdir(parents=True)
+    for n in ("ffmpeg", "ffprobe"):
+        (d / (n + exe)).write_bytes(b"x")
+    monkeypatch.setattr("app.dependencies.resource_root", lambda: tmp_path)
+    monkeypatch.setattr("app.dependencies.shutil.which", lambda n: "/usr/bin/" + n)
+    from app.dependencies import find_binary
+    assert find_binary("ffmpeg") == str(d / ("ffmpeg" + exe))
 
 
 def test_classify():
