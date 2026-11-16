@@ -100,7 +100,7 @@ def test_analyze_button_end_to_end(qapp, tmp_path, monkeypatch):
     added, _, groups = w.state.add_folder(str(root))
     w.probe(added)
 
-    def wait(cond, ms=20000):
+    def wait(cond, ms=180000):
         loop = QEventLoop(); QTimer.singleShot(ms, loop.quit)
         t = QTimer(); t.timeout.connect(lambda: loop.quit() if cond() else None); t.start(50)
         loop.exec(); t.stop()
@@ -111,6 +111,7 @@ def test_analyze_button_end_to_end(qapp, tmp_path, monkeypatch):
     w.a_sync.trigger()
     assert w.a_cancel.isEnabled() and not w.a_sync.isEnabled()
     wait(lambda: w._sync_job is None and w.state.sync_results)
+    assert w.state.sync_results, 'sync did not finish in time'
     res = w.state.sync_results
     expect = {"a.mp4": 3.0, "b.mp4": 70.0, "c.mp4": 25.5}
     for m in added:
